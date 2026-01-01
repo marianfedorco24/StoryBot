@@ -2,46 +2,32 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from dotenv import load_dotenv
 import os
+from modules import *
 
-state_store = {
-    "chat_id": None,
-    "user_id": None,
-    "ui_state": "menu",
-    "job": None
-}
 
-keyboard = [
-    [InlineKeyboardButton("Services", callback_data="main:services")],
-    [InlineKeyboardButton("Deploy", callback_data="main:deploy")],
-    [InlineKeyboardButton("Status", callback_data="main:status")]
-]
-
-markup = InlineKeyboardMarkup(keyboard)
-
-# Function to check if the user had access
-def has_access(update):
-    ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID")
-    return update.effective_user.id == int(ALLOWED_USER_ID)
 
 # Define a command handler for the /start command
+@requires_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global ui_state
-    if not has_access(update):
-        await update.message.reply_text('Access denied.')
-        return
-
-    state_store["ui_state"] = "menu"
-    await update.message.reply_text('Hello! I am your friendly bot. How can I assist you today?', reply_markup=markup)
+    context.user_data.update({
+        "keyboard_markup": None,
+        "can_type": True,
+        "bot_reply_on_message": None,
+        "last_bot_message_id": None,
+        "chat_id": update.effective_chat.id,
+        "callback": "script_and_description_generation"
+    })
+    await update.message.reply_text("Hi there. Please send your chosen story:")
 
 # Define a message handler for text messages
+@requires_access
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not has_access(update):
-        await update.message.reply_text('Access denied.')
-        return
     user_id = update.effective_user.id
     user_message = update.message.text
     await update.message.reply_text(user_id)
 
+# Define a button handler for inline keyboard buttons
+@requires_access
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
