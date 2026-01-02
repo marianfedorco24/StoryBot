@@ -3,7 +3,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from dotenv import load_dotenv
 import os
 from functools import wraps
-from openai import OpenAI
+from openai import AsyncOpenAI
+from json import loads, dumps
+
 
 load_dotenv()
 
@@ -22,56 +24,111 @@ def requires_access(func):
             return None
     return wrapper
 
-#             Story Bot FUNCTION CHAIN
+# Function to split the output into more messages if it exceeds Telegram's limit
+async def send_long_message(update, text, keyboard_markup=None):
+    max_length = 4096
+    for i in range(0, len(text), max_length):
+        chunk = text[i:i + max_length]
+        if update.message:
+            await update.message.reply_text(chunk, reply_markup=keyboard_markup if i == 0 else None)
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(chunk, reply_markup=keyboard_markup if i == 0 else None)
 
+# Helper function to load instructions efficiently
+def load_instructions(filepath="chatgpt_instructions.txt"):
+    with open(filepath, "r", encoding="utf-8") as file:
+        return file.read()
+
+# ------------------ Story Bot FUNCTION CHAIN ------------------
 # Function to regenerate the inputted story and create a script with a description
-def script_and_description_generation(user_story: str):
+async def script_and_description_generation(update, context):
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    INSTRUCTIONS = """### ROLE
-You are a master film director and storyboard writer. Your task is to rewrite a provided story into a script suitable for a viral video, split into 8-12 distinct scenes.
-
-### ANALYSIS PHASE
-Before writing, determine the overarching **GENRE and MOOD** of the story (e.g., Horror, Comedy, Fairy Tale, Noir).
-- This mood is the "Visual Anchor."
-- You must apply this mood to the lighting, color palette, and atmosphere of EVERY image description to ensure visual consistency.
-- Example: If the story is Horror, EVERY image prompt must specify "dark, ominous lighting, scary atmosphere, muted colors."
-
-### WRITING STYLE (STORY SECTIONS)
-- Tone: Folksy, conversational, and natural. Like a friend telling a legend to a friend.
-- Language: Simple and modern. No complex words.
-- Format: Optimized for Text-to-Speech (TTS). It must sound good when read aloud. Do not use newlines, line breaks, or the newline character (\n).
-- Structure:
-  - Scene 1 MUST be a "Hook/Intro" (e.g., "Did you know that...", or a cliffhanger summary) to grab attention.
-  - The following scenes tell the actual story chronologically.
-
-### VISUAL STYLE (IMAGE PROMPTS)
-- Style: Cartoony, but heavily influenced by the [Visual Anchor] determined above.
-- Content: Describe the scene, setting, and characters.
-- CRITICAL CONSTRAINT: Image generation is STATELESS. You must fully re-describe every character and setting in every single prompt.
-  - NEVER use references like "the same man" or "him".
-  - ALWAYS copy-paste the full visual details: Age, Hair, Clothes, Body, Face.
-  - ALWAYS explicitly repeat the mood/lighting (e.g., "scary horror atmosphere") in every single prompt.
-  - Characters must have exaggerated emotional expressions matching the story mood.
-
-### OUTPUT FORMAT
-Return ONLY raw JSON. Do not use Markdown formatting (no ```json). Do not add conversational filler.
-The output must be a list of objects with this schema:
-[
-  {
-    "story_section": "The narrated text for this scene...",
-    "scene_image_description": "A cartoony illustration of [Character Name, full visual description] standing in [Setting, full description], [Specific Mood/Lighting adjectives]..."
-  }
-]
-"""
+    INSTRUCTIONS = load_instructions()
     
+    user_story = update.message.text
+
+    # Acknowledge receipt of the story
+    await update.message.reply_text("Generating story script and video description from your input...\nThis may take a moment, please wait.")
+
     # ChatGPT API call to generate the script with image descriptions and video description
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    response = client.responses.create(
-        model="gpt-5.2",
-        input=user_story,
-        instructions=INSTRUCTIONS,
-    )
+    # client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    # try:
+    #     response = await client.responses.create(
+    #         model="gpt-5.2",
+    #         input=user_story,
+    #         instructions=INSTRUCTIONS,
+    #     )
+    #     script_and_description = response.output_text
 
-    print(response.output_text)
+    #     with open("story_data/script_and_description.json", "w", encoding="utf-8") as f:
+    #         f.write(script_and_description)
 
-script_and_description_generation("df")
+    # except Exception as e:
+    #     await update.message.reply_text(f"An error occurred while generating the script: {e}")
+    #     return
+    # Update user data and send the generated output
+    keyboard_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Review the script", callback_data="review:script")],
+        [InlineKeyboardButton("Review the video description", callback_data="review:description")]
+        ])
+    context.user_data.update({
+        "keyboard_markup": keyboard_markup,
+        "can_type": False,
+        "bot_reply_on_message": "Please review the generated script and video description.",
+        "chat_id": update.effective_chat.id,
+        "on_message_callback": None,
+        "on_button_callback": "review_script_or_description",
+        "section_storage": {
+            "is_reviewed_script": False,
+            "is_reviewed_description": False
+        }
+    })
+    await update.message.reply_text("Done!\nStory has been rewritten, image descriptions have been generated, and video description created.\nPlease review them:", reply_markup=keyboard_markup)
+
+async def review_script_or_description(update, context):
+    script_and_description = ""
+    with open("story_data/script_and_description.json", "r", encoding="utf-8") as f:
+        script_and_description = loads(f.read())
+
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "review:script":
+        keyboard_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Confirm", callback_data="review:script:confirm")],
+        [InlineKeyboardButton("Regenerate the script and video description", callback_data="review:script:regenerate")]
+        ])
+        context.user_data.update({
+        "keyboard_markup": keyboard_markup,
+        "can_type": False,
+        "bot_reply_on_message": "Please review the generated script.",
+        "on_message_callback": None,
+        "on_button_callback": "review_script"
+    })
+        await send_long_message(update, dumps(script_and_description["script"], indent=2, ensure_ascii=False), keyboard_markup)
+    elif data == "review:description":
+        await query.message.reply_text(text=script_and_description["video_description"])
+
+async def review_script(update, context):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "review:script:confirm":
+        context.user_data["section_storage"]["is_reviewed_script"] = True
+        await query.edit_message_text(text="You have confirmed the script.")
+        # FINISH IT!!! ---------------------------------------------------------------------------------
+        if not context.user_data["section_storage"]["is_reviewed_description"]:
+            await query.message.reply_text(text="Please review the video description as well.", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Review the video description", callback_data="review:description")]
+            ]))
+    elif data == "review:script:regenerate":
+        context.user_data.update({
+            "keyboard_markup": None,
+            "can_type": True,
+            "bot_reply_on_message": None,
+            "on_message_callback": "script_and_description_generation",
+            "on_button_callback": None
+        })
+        await query.edit_message_text(text="Please send your chosen story again to regenerate the script and video description.")
