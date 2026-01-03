@@ -48,6 +48,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Define a button handler for inline keyboard buttons
 @requires_access
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(context.user_data)
     # GENERAL BUTTON HANDLER
     callback = context.user_data.get("on_button_callback")
     if callback:

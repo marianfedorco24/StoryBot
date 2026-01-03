@@ -49,63 +49,55 @@ def load_instructions(filepath="chatgpt_instructions.txt"):
 
 # ------------------ Story Bot FUNCTION CHAIN ------------------
 # Function to regenerate the inputted story and create a script with a description
-async def script_and_description_generation(update, context, regeneration_story=None):
+async def script_and_description_generation(update, context, regeneration=False):
+    logger.info("SCRIPT AND DESCRIPTION GENERATION CALLED")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     INSTRUCTIONS = load_instructions()
     
     user_story = ""
-    if regeneration_story:
-        user_story = regeneration_story
-    else:
+    if not regeneration:
         user_story = update.message.text
-    context.user_data["user_story"] = user_story
+        with open("story_data/user_story.txt", "w", encoding="utf-8") as f:
+            f.write(user_story)
+    else:
+        with open("story_data/user_story.txt", "r", encoding="utf-8") as f:
+            user_story = f.read()
 
     # Acknowledge receipt of the story
-    await update.message.reply_text("Generating story script and video description from your input...\nThis may take a moment, please wait.")
+    if update.message:
+        await update.message.reply_text("Generating story script and video description from your input...\nThis may take a moment, please wait.")
+    else:
+        await update.callback_query.message.reply_text("Generating story script and video description from your input...\nThis may take a moment, please wait.")
 
     # ChatGPT API call to generate the script with image descriptions and video description
-    # client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-    # try:
-    #     response = await client.responses.create(
-    #         model="gpt-5.2",
-    #         input=user_story,
-    #         instructions=INSTRUCTIONS,
-    #         temperature=0.7
-    #     )
-    #     script_and_description = response.output_text
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    try:
+        response = await client.responses.create(
+            model="gpt-5.2",
+            input=user_story,
+            instructions=INSTRUCTIONS,
+            temperature=0.7
+        )
+        script_and_description = response.output_text
 
-    #     with open("story_data/script_and_description.json", "w", encoding="utf-8") as f:
-    #         f.write(script_and_description)
+        with open("story_data/script_and_description.json", "w", encoding="utf-8") as f:
+            f.write(script_and_description)
 
-    # except Exception as e:
-    #     await update.message.reply_text(f"An error occurred while generating the script: {e}")
-    #     return
+    except Exception as e:
+        await update.message.reply_text(f"An error occurred while generating the script: {e}")
+        return
     # Update user data and send the generated output
-    keyboard_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Review the script", callback_data="review:script")],
-        [InlineKeyboardButton("Review the video description", callback_data="review:description")]
-        ])
+
     context.user_data.update({
-        "keyboard_markup": keyboard_markup,
-        "can_type": False,
-        "bot_reply_on_message": "Please review the generated script and video description.",
-        "chat_id": update.effective_chat.id,
-        "on_message_callback": None,
-        "on_button_callback": "review_script_or_description",
         "section_storage": {
             "is_reviewed_script": False,
             "is_reviewed_description": False
         }
     })
-    await update.message.reply_text("Done!\nStory has been rewritten, image descriptions have been generated, and video description created.\nPlease review them:", reply_markup=keyboard_markup)
-    
+    await review_script_or_description(update, context, location="default")
 
 async def review_script_or_description(update, context, location=None):
     logger.info("REVIEW SCRIPT OR DESCRIPTION CALLED")
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
     if location == "default":
         keyboard_rows = []
         if not context.user_data["section_storage"]["is_reviewed_script"]:
@@ -115,14 +107,24 @@ async def review_script_or_description(update, context, location=None):
 
         if not keyboard_rows:
             #BOTH REVIEWED, CONTINUE --------------------------------------------------------------------------
-            await query.message.reply_text(text="BOTH REVIEWED")
+            await update.callback_query.message.reply_text(text="BOTH REVIEWED")
         else:
             keyboard_markup = InlineKeyboardMarkup(keyboard_rows)
+            context.user_data.update({
+                "keyboard_markup": keyboard_markup,
+                "can_type": False,
+                "bot_reply_on_message": "Please review the generated script and video description.",
+                "on_message_callback": None,
+                "on_button_callback": "review_script_or_description"
+            })
             if update.message:
                 await update.message.reply_text("Done!\nStory has been rewritten, image descriptions have been generated, and video description created.\nPlease review them:", reply_markup=keyboard_markup)
             elif update.callback_query:
-                await query.message.reply_text("Done!\nStory has been rewritten, image descriptions have been generated, and video description created.\nPlease review them:", reply_markup=keyboard_markup)
+                await update.callback_query.message.reply_text("Done!\nStory has been rewritten, image descriptions have been generated, and video description created.\nPlease review them:", reply_markup=keyboard_markup)
     else:
+        query = update.callback_query
+        await query.answer()
+        data = query.data
         script_and_description = ""
         with open("story_data/script_and_description.json", "r", encoding="utf-8") as f:
             script_and_description = loads(f.read())
@@ -155,6 +157,7 @@ async def review_script_or_description(update, context, location=None):
             await query.message.reply_text(text=script_and_description["video_description"], reply_markup=keyboard_markup)
 
 async def review_script(update, context):
+    logger.info("REVIEW SCRIPT CALLED")         
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -164,9 +167,11 @@ async def review_script(update, context):
         await query.message.reply_text(text="You have confirmed the script.")
         await review_script_or_description(update, context, location="default")
     elif data == "review:script:regenerate":
-        await script_and_description_generation(update, context, regeneration_story=context.user_data["user_story"])
+        # LOAD IT FROM THE FILE AND PASS IT TO THE FUNCTION
+        await script_and_description_generation(update, context, regeneration=True)
 
 async def review_description(update, context):
+    logger.info("REVIEW DESCRIPTION CALLED")
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -175,6 +180,26 @@ async def review_description(update, context):
         context.user_data["section_storage"]["is_reviewed_description"] = True
         await query.message.reply_text(text="You have confirmed the video description.")
         await review_script_or_description(update, context, location="default")
-    elif data == "review:description:regenerate":
-        pass
-        # Implement editing functionality if needed
+    elif data == "review:description:edit":
+        context.user_data.update({
+            "keyboard_markup": None,
+            "can_type": True,
+            "bot_reply_on_message": None,
+            "on_message_callback": "edit_description",
+            "on_button_callback": None
+        })
+        await query.message.reply_text(text="Please enter the new video description:")
+
+async def edit_description(update, context):
+    logger.info("EDIT DESCRIPTION CALLED")
+    new_description = update.message.text
+    script_and_description = ""
+    with open("story_data/script_and_description.json", "r", encoding="utf-8") as f:
+        script_and_description = loads(f.read())
+    script_and_description["video_description"] = new_description
+    with open("story_data/script_and_description.json", "w", encoding="utf-8") as f:
+        f.write(dumps(script_and_description, indent=2, ensure_ascii=False))
+    
+    await update.message.reply_text("Video description updated successfully.")
+    context.user_data["section_storage"]["is_reviewed_description"] = True
+    await review_script_or_description(update, context, location="default")
