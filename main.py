@@ -2,7 +2,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from dotenv import load_dotenv
 import os, logging
-from modules import *
+from modules.modules_script_and_description_generation import *
+from modules.modules_general import *
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(

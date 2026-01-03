@@ -5,63 +5,25 @@ import os, logging
 from functools import wraps
 from openai import AsyncOpenAI
 from json import loads, dumps
+from modules.modules_general import *
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-# Suppress debug logs from external libraries
-logging.getLogger("telegram").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+
 load_dotenv()
-
-# A decorator to check if the user had access
-def requires_access(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID")
-        if update.effective_user.id == int(ALLOWED_USER_ID):
-            return await func(update, context, *args, **kwargs)
-        else:
-            if update.message:
-                await update.message.reply_text('Access denied.')
-            elif update.callback_query:
-                await update.callback_query.answer('Access denied.', show_alert=True)
-            return None
-    return wrapper
-
-# Function to split the output into more messages if it exceeds Telegram's limit
-async def send_long_message(update, text, keyboard_markup=None):
-    max_length = 4096
-    for i in range(0, len(text), max_length):
-        chunk = text[i:i + max_length]
-        if update.message:
-            await update.message.reply_text(chunk, reply_markup=keyboard_markup if i == 0 else None)
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(chunk, reply_markup=keyboard_markup if i == 0 else None)
-
-# Helper function to load instructions efficiently
-def load_instructions(filepath="chatgpt_instructions.txt"):
-    with open(filepath, "r", encoding="utf-8") as file:
-        return file.read()
 
 # ------------------ Story Bot FUNCTION CHAIN ------------------
 # Function to regenerate the inputted story and create a script with a description
 async def script_and_description_generation(update, context, regeneration=False):
     logger.info("SCRIPT AND DESCRIPTION GENERATION CALLED")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    INSTRUCTIONS = load_instructions()
+    INSTRUCTIONS = load_file_contents("prompts/script_and_description_generation_instructions.txt")
     
     user_story = ""
     if not regeneration:
         user_story = update.message.text
-        with open("story_data/user_story.txt", "w", encoding="utf-8") as f:
-            f.write(user_story)
+        save_file_contents("story_data/user_story.txt", user_story)
     else:
-        with open("story_data/user_story.txt", "r", encoding="utf-8") as f:
-            user_story = f.read()
+        user_story = load_file_contents("story_data/user_story.txt")
 
     # Acknowledge receipt of the story
     if update.message:
@@ -107,7 +69,10 @@ async def review_script_or_description(update, context, location=None):
 
         if not keyboard_rows:
             #BOTH REVIEWED, CONTINUE --------------------------------------------------------------------------
-            await update.callback_query.message.reply_text(text="BOTH REVIEWED")
+            if update.message:
+                await update.message.reply_text(text="BOTH REVIEWED")
+            else:
+                await update.callback_query.message.reply_text(text="BOTH REVIEWED")
         else:
             keyboard_markup = InlineKeyboardMarkup(keyboard_rows)
             context.user_data.update({
@@ -125,9 +90,7 @@ async def review_script_or_description(update, context, location=None):
         query = update.callback_query
         await query.answer()
         data = query.data
-        script_and_description = ""
-        with open("story_data/script_and_description.json", "r", encoding="utf-8") as f:
-            script_and_description = loads(f.read())
+        script_and_description = load_file_contents("story_data/script_and_description.json")
 
         if data == "review:script":
             keyboard_markup = InlineKeyboardMarkup([
@@ -193,13 +156,10 @@ async def review_description(update, context):
 async def edit_description(update, context):
     logger.info("EDIT DESCRIPTION CALLED")
     new_description = update.message.text
-    script_and_description = ""
-    with open("story_data/script_and_description.json", "r", encoding="utf-8") as f:
-        script_and_description = loads(f.read())
+    script_and_description = load_file_contents("story_data/script_and_description.json")
     script_and_description["video_description"] = new_description
-    with open("story_data/script_and_description.json", "w", encoding="utf-8") as f:
-        f.write(dumps(script_and_description, indent=2, ensure_ascii=False))
-    
+    save_file_contents("story_data/script_and_description.json", script_and_description)
+
     await update.message.reply_text("Video description updated successfully.")
     context.user_data["section_storage"]["is_reviewed_description"] = True
     await review_script_or_description(update, context, location="default")
